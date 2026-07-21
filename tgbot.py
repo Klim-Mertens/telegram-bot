@@ -1,5 +1,5 @@
 import aiohttp
-import ssl
+
 import asyncio
 import os
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
@@ -88,7 +88,7 @@ async def get_weather(city:str) -> str:
         'units':'metric',
         'lang':'ru',
     }
-    async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=False)) as session:
+    async with aiohttp.ClientSession() as session:
         async with session.get(url,params=params) as response:
             if response.status==200:
                 data=await response.json()
@@ -345,4 +345,3 @@ async def main():
 if __name__=='__main__':
     asyncio.run(main())
     
-
