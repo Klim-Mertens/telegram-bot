@@ -1,5 +1,5 @@
 import aiohttp
-
+import ssl
 import asyncio
 import os
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
@@ -10,7 +10,6 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 from aiogram.types import InlineKeyboardMarkup , InlineKeyboardButton
 from aiogram.filters.callback_data import CallbackData
-
 
 
 
@@ -53,12 +52,20 @@ def get_main_keyboard() -> ReplyKeyboardMarkup:
                 KeyboardButton(text='📚 My Notes'),
                 KeyboardButton(text='ℹ️ Help')
             ],
+            [   KeyboardButton(text='🕵️ Profile')],
+            [KeyboardButton(text='🔎Search')],
         ],
         resize_keyboard=True
     )
     return kb
 
-
+@dp.message(F.text == '🔎Search')
+async def osint_button(message: types.Message):
+    await message.answer(
+        '🔎 <b>OFindinf someone</b>\n\n'
+        'write /find first name and last name',
+        parse_mode='HTML'
+    )
 
 @dp.message(F.text == 'ℹ️ Help')
 async def show_help(message: types.Message):
@@ -72,6 +79,7 @@ async def show_help(message: types.Message):
         '/weather (city) — show weather in city.\n'
         '/note (text) — save note.\n'
         '/all_notes — show all your notes.\n'
+        '/search - find someone.\n'
         '/delete (number) — delete note.\n'
         '/start — reset bot and show main menu.',
         parse_mode='HTML',
@@ -88,7 +96,7 @@ async def get_weather(city:str) -> str:
         'units':'metric',
         'lang':'ru',
     }
-    async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=False)) as session:
         async with session.get(url,params=params) as response:
             if response.status==200:
                 data=await response.json()
@@ -116,6 +124,7 @@ async def cmd_start(message: types.Message):
         f'/note (text) and i will save it for you\n'
         f'/all_notes and i will show you all your notes\n'
         f'/delete (number) and i will delete your note\n'
+        f'/search (name) and i will find someone\n'
         f'Use buttons or commands, for help press button ℹ️ Help',
         reply_markup=keyboard
         )
@@ -137,6 +146,22 @@ async def ask_note_text(message: types.Message,state: FSMContext):
         'example: Buy Milk',
         reply_markup=ReplyKeyboardRemove()
     )
+
+
+@dp.message(F.text == '🕵️ Profile')
+async def profile_button(message: types.Message):
+    user = message.from_user
+    await message.answer(
+        f'🪪 <b>Ваш профиль:</b>\n\n'
+        f'<b>ID:</b> <code>{user.id}</code>\n'
+        f'<b>Имя:</b> {user.first_name or "не указано"}\n'
+        f'<b>Фамилия:</b> {user.last_name or "не указана"}\n'
+        f'<b>Username:</b> @{user.username or "не указан"}\n'
+        f'<b>Язык:</b> {user.language_code or "не указан"}',
+        parse_mode='HTML'
+    )
+
+
 
 @dp.message(F.text == '🗑 Delete Note')
 async def ask_delete_number(message: types.Message,state:FSMContext):
@@ -336,6 +361,158 @@ async def delete_note_inline(callback: types.CallbackQuery, callback_data: Delet
         reply_markup= get_main_keyboard()
     )
     await callback.answer('✅Deleted!')
+
+
+@dp.message (Command('profile'))
+async def cmd_profile(message: types.Message):
+    user = message.from_user
+    await message.answer(
+        f'<b> Your profile:</b>\n\n'
+        f'<b>ID:</b> <code>{user.id}</code>\n'
+        f'<b>First Name:</b> {user.first_name or 'not found'}\n'
+        f'<b>Last Name:</b> {user.last_name or 'not found'}\n'
+        f'<b>Username:</b> @{user.username or 'not found'}\n'
+        f'<b>Language:</b> {user.language_code or 'not found'}',
+        parse_mode='HTML'
+    )
+
+
+@dp.message(Command('search'))
+async def cmd_search(message: types.Message):
+    text = message.text.strip()
+    parts = text.split(maxsplit=1)
+    if len(parts) == 1:
+        await message.answer('🔍 Write the Name you want to find')
+        return
+    
+    query = parts[1]
+    await message.answer(f'🔍 Finding: {query}...')
+    
+    params = {
+        'action': 'query',
+        'list': 'search',
+        'srsearch': query,
+        'format': 'json',
+        'srlimit': 5,
+    }
+    headers = {
+        'User-Agent': 'TelegramBot/1.0 (https://t.me/your_bot; your_email@example.com)'
+    }
+    
+    async with aiohttp.ClientSession(
+        connector=aiohttp.TCPConnector(ssl=False),
+        headers=headers
+    ) as session:
+        async with session.get('https://en.wikipedia.org/w/api.php', params=params) as resp:
+            if resp.status == 200:
+                data = await resp.json()
+                
+                search_results = data.get('query', {}).get('search', [])
+                
+                if not search_results:
+                    await message.answer(f'❌ Nothing found for "{query}".')
+                    return
+                
+                result = f'🔍 <b>Wikipedia results for "{query}":</b>\n\n'
+                
+                for i, item in enumerate(search_results[:5], 1):
+                    title = item['title']
+                    snippet = item['snippet'].replace('<span class="searchmatch">', '<b>').replace('</span>', '</b>')[:200]
+                    page_url = f'https://en.wikipedia.org/wiki/{title.replace(" ", "_")}'
+                    
+                    result += f'<b>{i}.</b> <a href="{page_url}">{title}</a>\n'
+                    result += f'{snippet}...\n\n'
+                
+                await message.answer(result, parse_mode='HTML', disable_web_page_preview=True)
+            else:
+                await message.answer(f'❌ Error: {resp.status}')
+
+@dp.message(Command('find'))
+async def cmd_find(message: types.Message):
+    text = message.text.strip()
+    parts = text.split(maxsplit=1)
+    if len(parts) == 1:
+        await message.answer(
+            '🔍 <b>Поиск человека:</b>\n\n'
+            '/find Имя Фамилия',
+            parse_mode='HTML'
+        )
+        return
+    
+    query = parts[1]
+    await message.answer(f'🔍 Ищу "{query}" по всем соцсетям...')
+    
+    sites = {
+        '🇷🇺 ВКонтакте': 'vk.com',
+        '📷 Instagram': 'instagram.com',
+        '👤 Facebook': 'facebook.com',
+        '🐦 Twitter/X': 'twitter.com',
+        '💻 GitHub': 'github.com',
+        '🎵 TikTok': 'tiktok.com',
+        '✈️ Telegram': 't.me',
+        '📱 Reddit': 'reddit.com',
+    }
+    
+    all_results = {}
+    
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
+    }
+    
+    # Список серверов SearXNG (если один не отвечает, пробуем другой)
+    servers = [
+        'https://search.sapti.me/search',
+        'https://searx.tiekoetter.com/search',
+        'https://searx.be/search',
+    ]
+    
+    async with aiohttp.ClientSession(
+        connector=aiohttp.TCPConnector(ssl=False),
+        headers=headers
+    ) as session:
+        for site_name, site_domain in sites.items():
+            search_query = f'{query} site:{site_domain}'
+            
+            for server in servers:
+                try:
+                    params = {
+                        'q': search_query,
+                        'format': 'json',
+                        'pageno': 1,
+                    }
+                    
+                    async with session.get(server, params=params, timeout=10) as resp:
+                        if resp.status == 200:
+                            data = await resp.json()
+                            results = data.get('results', [])
+                            if results:
+                                all_results[site_name] = results[:2]
+                            break  # Получили ответ — переходим к следующей соцсети
+                except:
+                    continue  # Этот сервер не ответил — пробуем следующий
+    
+    if not all_results:
+        await message.answer(f'❌ Ничего не найдено для "{query}".\nПопробуй другой запрос.')
+        return
+    
+    result_text = f'🔍 <b>Результаты для "{query}":</b>\n\n'
+    total_found = 0
+    
+    for site_name, results in all_results.items():
+        result_text += f'<b>{site_name}:</b>\n'
+        for item in results:
+            total_found += 1
+            title = item.get('title', 'Без названия')[:100]
+            url_link = item.get('url', '')
+            result_text += f'• <a href="{url_link}">{title}</a>\n'
+        result_text += '\n'
+    
+    result_text += f'<i>Найдено ссылок: {total_found} | SearXNG</i>'
+    
+    await message.answer(result_text, parse_mode='HTML', disable_web_page_preview=True)
+
+
+
 
 @dp.message()
 async def echo(mes: types.Message):
