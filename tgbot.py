@@ -433,81 +433,65 @@ async def cmd_find(message: types.Message):
     parts = text.split(maxsplit=1)
     if len(parts) == 1:
         await message.answer(
-            '🔍 <b>Поиск человека:</b>\n\n'
-            '/find Имя Фамилия',
+            'write the name you wand to find',
             parse_mode='HTML'
         )
         return
     
-    query = parts[1]
-    await message.answer(f'🔍 Ищу "{query}" по всем соцсетям...')
+    query = parts[1].strip()
     
-    sites = {
-        '🇷🇺 ВКонтакте': 'vk.com',
-        '📷 Instagram': 'instagram.com',
-        '👤 Facebook': 'facebook.com',
-        '🐦 Twitter/X': 'twitter.com',
-        '💻 GitHub': 'github.com',
-        '🎵 TikTok': 'tiktok.com',
-        '✈️ Telegram': 't.me',
-        '📱 Reddit': 'reddit.com',
+    usernames = [
+        query.lower().replace(' ', '_'),   
+        query.lower().replace(' ', ''),  
+        query.lower().replace(' ', '.'),   
+    ]
+    
+    username = usernames[0]
+    await message.answer(f'🔍 Checing username: <b>{username}</b>...', parse_mode='HTML')
+    
+    platforms = {
+        '🇷🇺 ВКонтакте': f'https://vk.com/{username}',
+        '🇷🇺 Одноклассники': f'https://ok.ru/{username}',
+        '🇷🇺 Яндекс.Дзен': f'https://dzen.ru/{username}',
+        '🇷🇺 Пикабу': f'https://pikabu.ru/@{username}',
+        '🇷🇺 Хабр': f'https://habr.com/ru/users/{username}',
+        '🇷🇺 LiveJournal': f'https://{username}.livejournal.com',
+        '🇷🇺 RuTube': f'https://rutube.ru/channel/{username}',
+        '💻 GitHub': f'https://github.com/{username}',
+        '🐦 Twitter/X': f'https://x.com/{username}',
+        '📷 Instagram': f'https://instagram.com/{username}',
+        '🎵 TikTok': f'https://tiktok.com/@{username}',
+        '📱 Reddit': f'https://reddit.com/user/{username}',
+        '🎮 Steam': f'https://steamcommunity.com/id/{username}',
+        '💼 LinkedIn': f'https://linkedin.com/in/{username}',
     }
     
-    all_results = {}
+    results = []
     
     headers = {
         'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
     }
     
-    # Список серверов SearXNG (если один не отвечает, пробуем другой)
-    servers = [
-        'https://search.sapti.me/search',
-        'https://searx.tiekoetter.com/search',
-        'https://searx.be/search',
-    ]
-    
     async with aiohttp.ClientSession(
         connector=aiohttp.TCPConnector(ssl=False),
         headers=headers
     ) as session:
-        for site_name, site_domain in sites.items():
-            search_query = f'{query} site:{site_domain}'
-            
-            for server in servers:
-                try:
-                    params = {
-                        'q': search_query,
-                        'format': 'json',
-                        'pageno': 1,
-                    }
-                    
-                    async with session.get(server, params=params, timeout=10) as resp:
-                        if resp.status == 200:
-                            data = await resp.json()
-                            results = data.get('results', [])
-                            if results:
-                                all_results[site_name] = results[:2]
-                            break  # Получили ответ — переходим к следующей соцсети
-                except:
-                    continue  # Этот сервер не ответил — пробуем следующий
+        for name, url in platforms.items():
+            try:
+                async with session.get(url, timeout=5, allow_redirects=True) as resp:
+                    status = resp.status
+                    if status == 200:
+                        results.append(f'✅ <a href="{url}">{name}</a>')
+                    elif status == 404:
+                        results.append(f'❌ {name}: was not found')
+                    else:
+                        results.append(f'⚠️ {name}: code {status}')
+            except:
+                results.append(f'⏭️ {name}: no informacion')
     
-    if not all_results:
-        await message.answer(f'❌ Ничего не найдено для "{query}".\nПопробуй другой запрос.')
-        return
-    
-    result_text = f'🔍 <b>Результаты для "{query}":</b>\n\n'
-    total_found = 0
-    
-    for site_name, results in all_results.items():
-        result_text += f'<b>{site_name}:</b>\n'
-        for item in results:
-            total_found += 1
-            title = item.get('title', 'Без названия')[:100]
-            url_link = item.get('url', '')
-            result_text += f'• <a href="{url_link}">{title}</a>\n'
-        result_text += '\n'
-    
-    result_text += f'<i>Найдено ссылок: {total_found} | SearXNG</i>'
+    result_text = f'🔍 <b>Results of searching "{username}":</b>\n\n'
+    result_text += '\n'.join(results)
+    result_text += f'\n\n<i>Sites was checed: {len(platforms)} | </i>'
     
     await message.answer(result_text, parse_mode='HTML', disable_web_page_preview=True)
 
