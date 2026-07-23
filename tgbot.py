@@ -1,18 +1,15 @@
 import aiohttp
-import ssl
 import asyncio
 import os
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 import json
-from aiogram import Bot, Dispatcher, types,F
+from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
-from aiogram.fsm.state import State, StatesGroup 
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
-from aiogram.types import InlineKeyboardMarkup , InlineKeyboardButton
 from aiogram.filters.callback_data import CallbackData
 
-
-
+# --- Config ---
 try:
     from config import TOKEN, WEATHER_TOKEN
 except ImportError:
@@ -21,14 +18,15 @@ except ImportError:
 
 NOTES_FILE = 'notes.json'
 
+# --- Bot & Dispatcher ---
+bot = Bot(token=TOKEN)
+dp = Dispatcher()
 
-bot= Bot(token=TOKEN)
-dp=Dispatcher()
-
-class DeleteCallback(CallbackData, prefix= 'deleta'):
+# --- Callback Data ---
+class DeleteCallback(CallbackData, prefix='delete'):
     note_id: int
 
-
+# --- States ---
 class WeatherState(StatesGroup):
     waiting_for_city = State()
 
@@ -38,471 +36,318 @@ class NoteState(StatesGroup):
 class DeleteState(StatesGroup):
     waiting_for_delete = State()
 
+class SearchState(StatesGroup):
+    waiting_for_query = State()
 
-
+# --- Keyboard ---
 def get_main_keyboard() -> ReplyKeyboardMarkup:
-    kb = ReplyKeyboardMarkup(
+    return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text='🌍 Weather')],
-            [
-                KeyboardButton(text='📝 New Note'),
-                KeyboardButton(text='🗑 Delete Note')
-            ],
-            [
-                KeyboardButton(text='📚 My Notes'),
-                KeyboardButton(text='ℹ️ Help')
-            ],
-            [   KeyboardButton(text='🕵️ Profile')],
-            [KeyboardButton(text='🔎Search')],
+            [KeyboardButton(text='📝 New Note'), KeyboardButton(text='🗑 Delete Note')],
+            [KeyboardButton(text='📚 My Notes'), KeyboardButton(text='🔍 Search')],
+            [KeyboardButton(text='🕵️ My Profile'), KeyboardButton(text='ℹ️ Help')],
         ],
         resize_keyboard=True
     )
-    return kb
 
-@dp.message(F.text == '🔎Search')
-async def osint_button(message: types.Message):
-    await message.answer(
-        '🔎 <b>OFindinf someone</b>\n\n'
-        'write /find first name and last name',
-        parse_mode='HTML'
-    )
-
+# --- Help ---
 @dp.message(F.text == 'ℹ️ Help')
 async def show_help(message: types.Message):
     await message.answer(
-        '🤖 <b>What I can do:</b>\n\n'
-        '🌍 <b>Weather</b> — press button and choose city.\n'
-        '📝 <b>New Note</b> — press button and write note text.\n'
-        '🗑 <b>Delete Note</b> — press button and choose number.\n'
-        '📚 <b>My Notes</b> — show your notes.\n\n'
-        '<i>OR you can use commands:</i>\n'
-        '/weather (city) — show weather in city.\n'
-        '/note (text) — save note.\n'
-        '/all_notes — show all your notes.\n'
-        '/search - find someone.\n'
-        '/delete (number) — delete note.\n'
-        '/start — reset bot and show main menu.',
+        '🤖 <b>Commands:</b>\n\n'
+        '🌍 /weather (city) — weather\n'
+        '📝 /note (text) — save note\n'
+        '📚 /all_notes — show notes\n'
+        '🗑 /delete (number) — delete note\n'
+        '🔍 /find (query) — search everywhere\n'
+        '🕵️/My_Profile — your info\n'
+        '/start — main menu',
         parse_mode='HTML',
         reply_markup=get_main_keyboard()
     )
 
-
-
-async def get_weather(city:str) -> str:
-    url=f"https://api.openweathermap.org/data/2.5/weather"
-    params={
-        'q':city,
-        'appid':WEATHER_TOKEN,
-        'units':'metric',
-        'lang':'ru',
-    }
+# --- Weather ---
+async def get_weather(city: str) -> str:
+    url = 'https://api.openweathermap.org/data/2.5/weather'
+    params = {'q': city, 'appid': WEATHER_TOKEN, 'units': 'metric', 'lang': 'en'}
     async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=False)) as session:
-        async with session.get(url,params=params) as response:
-            if response.status==200:
-                data=await response.json()
-                temp=data['main']['temp']
-                fl=data['main']['feels_like']
-                des=data['weather'][0]['description']
-                return(
-                    f'Weater in city {city.title()}:\n'
-                    f'Temperature: {temp} °C feels like {fl} °C\n'
-                    f'Description: {des.capitalize()}'
+        async with session.get(url, params=params) as resp:
+            if resp.status == 200:
+                data = await resp.json()
+                return (
+                    f'🌍 {city.title()}:\n'
+                    f'🌡 {data["main"]["temp"]}°C (feels like {data["main"]["feels_like"]}°C)\n'
+                    f'☁️ {data["weather"][0]["description"].capitalize()}'
                 )
-            elif response.status==404:
-                return f'City {city} was not found. Try another city'
-            else:
-                return f'Error type :{response.status}'
+            return f'❌ City not found.' if resp.status == 404 else f'⚠️ Error: {resp.status}'
 
+# --- Notes ---
+def load_notes() -> list:
+    if not os.path.exists(NOTES_FILE):
+        return []
+    with open(NOTES_FILE, 'r', encoding='utf-8') as f:
+        return json.load(f)
+
+def save_notes(notes: list) -> None:
+    with open(NOTES_FILE, 'w', encoding='utf-8') as f:
+        json.dump(notes, f, ensure_ascii=False, indent=2)
+
+# --- Unified Search ---
+async def search_everywhere(query: str) -> str:
+    username = query.lower().replace(' ', '_')
+    headers = {'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'}
+    
+    # 1. Check platforms
+    platform_results = []
+    async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=False), headers=headers) as session:
+        for name, domain in [
+            ('VK', f'https://vk.com/{username}'),
+            ('GitHub', f'https://github.com/{username}'),
+            ('Reddit', f'https://reddit.com/user/{username}'),
+            ('Twitter/X', f'https://x.com/{username}'),
+        ]:
+            try:
+                async with session.get(domain, timeout=5, allow_redirects=True) as resp:
+                    if resp.status == 200:
+                        platform_results.append(f'• <a href="{domain}">{name}</a>')
+            except:
+                pass
+    
+    # 2. Search via SearXNG, fallback to Wikipedia
+    google_results = []
+    
+    # Try SearXNG first
+    for server in [
+        'https://search.sapti.me/search',
+        'https://searx.tiekoetter.com/search',
+    ]:
+        try:
+            params = {'q': query, 'format': 'json', 'pageno': 1}
+            async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=False), headers=headers) as session:
+                async with session.get(server, params=params, timeout=10) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        results = data.get('results', [])
+                        if results:
+                            for item in results[:3]:
+                                title = item.get('title', '')[:100]
+                                link = item.get('url', '')
+                                if title and link:
+                                    google_results.append(f'• <a href="{link}">{title}</a>')
+                            break
+        except:
+            pass
+    
+    # Fallback to Wikipedia
+    if not google_results:
+        try:
+            params = {
+                'action': 'query',
+                'list': 'search',
+                'srsearch': query,
+                'format': 'json',
+                'srlimit': 3,
+            }
+            async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=False), headers=headers) as session:
+                async with session.get('https://en.wikipedia.org/w/api.php', params=params, timeout=10) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        for item in data.get('query', {}).get('search', [])[:3]:
+                            title = item['title']
+                            link = f'https://en.wikipedia.org/wiki/{title.replace(" ", "_")}'
+                            snippet = item.get('snippet', '').replace('<span class="searchmatch">', '').replace('</span>', '')[:100]
+                            google_results.append(f'• <a href="{link}">{title}</a> — {snippet}...')
+        except:
+            pass
+    
+    # 3. Build result
+    result = ''
+    if platform_results:
+        result += '<b>🔗 Profiles found:</b>\n' + '\n'.join(platform_results) + '\n'
+    if google_results:
+        if result:
+            result += '\n'
+        result += '<b>🔍 Web search:</b>\n' + '\n'.join(google_results)
+    
+    return result if result else '❌ Nothing found.'
+
+# --- Handlers ---
 @dp.message(Command('start'))
 async def cmd_start(message: types.Message):
-    un=message.from_user.first_name
-    keyboard=get_main_keyboard()
     await message.answer(
-
-        f'Hallo,{un}! Write something and i will repeat it for you\n'
-        f'Or you can write: \n/weather (city) and i will show you weather \n'
-        f'/note (text) and i will save it for you\n'
-        f'/all_notes and i will show you all your notes\n'
-        f'/delete (number) and i will delete your note\n'
-        f'/search (name) and i will find someone\n'
-        f'Use buttons or commands, for help press button ℹ️ Help',
-        reply_markup=keyboard
-        )
-
-@dp.message(F.text == '🌍 Weather')
-async def ask_city(message: types.Message,state: FSMContext):
-    await state.set_state(WeatherState.waiting_for_city)
-    await message.answer(
-        'Please, choose City\n' \
-        'example:Moscow',   
-        reply_markup=ReplyKeyboardRemove()
+        f'Hello, {message.from_user.first_name}! Use buttons or commands.',
+        reply_markup=get_main_keyboard()
     )
 
-@dp.message(F.text == '📝 New Note')
-async def ask_note_text(message: types.Message,state: FSMContext):
-    await state.set_state(NoteState.waiting_for_note)
-    await message.answer(
-        'Write note text\n'
-        'example: Buy Milk',
-        reply_markup=ReplyKeyboardRemove()
-    )
-
-
-@dp.message(F.text == '🕵️ Profile')
-async def profile_button(message: types.Message):
+@dp.message(Command('My_Profile'))
+@dp.message(F.text == '🕵️ My Profile')
+async def show_profile(message: types.Message):
     user = message.from_user
     await message.answer(
-        f'🪪 <b>Ваш профиль:</b>\n\n'
-        f'<b>ID:</b> <code>{user.id}</code>\n'
-        f'<b>Имя:</b> {user.first_name or "не указано"}\n'
-        f'<b>Фамилия:</b> {user.last_name or "не указана"}\n'
-        f'<b>Username:</b> @{user.username or "не указан"}\n'
-        f'<b>Язык:</b> {user.language_code or "не указан"}',
+        f'🪪 <b>Profile:</b>\n'
+        f'ID: <code>{user.id}</code>\n'
+        f'Name: {user.first_name or "?"} {user.last_name or ""}\n'
+        f'Username: @{user.username or "none"}\n'
+        f'Language: {user.language_code or "?"}',
         parse_mode='HTML'
     )
 
-
-
-@dp.message(F.text == '🗑 Delete Note')
-async def ask_delete_number(message: types.Message,state:FSMContext):
-    notes = load_notes()
-    if not notes:
-        await message.answer(
-            'You have no notes to delete.',
-            reply_markup=get_main_keyboard()
-            )
-        return
-    for i,note in enumerate(notes,1):
-        keyboard= InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(
-                text=f'🗑 Delete #{i}',
-                callback_data=DeleteCallback(note_id=i).pack()
-            )]
-        ])
-        await message.answer(f'{i}.{note}',reply_markup=keyboard)
-    await message.answer(
-        'Choose note you want to delete or write number',
-        reply_markup= get_main_keyboard()
-    )
-    await state.set_state(DeleteState.waiting_for_delete)
-
-
-def load_notes() -> list:
-    if os.path.exists(NOTES_FILE)==0:
-        return[]
-    with open(NOTES_FILE,'r',encoding='utf-8')as f:
-        return json.load(f)
-
-def save_notes(notes:list)-> None:
-    with open(NOTES_FILE,'w',encoding='utf-8')as f:
-        json.dump(notes, f, ensure_ascii=False, indent=2)
-
-@dp.message(Command('note'))
-async def cmd_note(message: types.Message):
-    text=message.text.strip()
-    parts=text.split(maxsplit=1)
-    if len(parts)==1:
-        await message.answer(
-            'Write note text\n' \
-            'example: /note Buy Milk'
-        )
-        return
-    note_text=parts[1]
-    notes= load_notes()
-    notes.append(note_text)
-    save_notes(notes)
-    await message.answer(
-        f'Note was added! You have {len(notes)} note(s):\n'
-        f'added note: {note_text}'
-    )
-
-@dp.message(F.text=='📚 My Notes')
-async def show_my_notes(message: types.Message):
-    notes= load_notes()
-    if not notes:
-        await message.answer(
-            'You have NO notes',
-            reply_markup=get_main_keyboard()
-        )
-        return
-    for i, note in enumerate(notes,1):
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(
-                text=f' Delete #{i}',
-                callback_data=DeleteCallback(note_id=i).pack()
-            )]
-
-        ])
-        await message.answer(f'{i}.{note}',reply_markup=keyboard)
-
-
-@dp.message(Command('all_notes'))
-async def cmd_all_notes(message:types.Message):
-    notes= load_notes()
-    if notes==0:
-        await message.answer('You have NO notes',reply_markup=get_main_keyboard())
-        return
-    for i,note in enumerate(notes,1):
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(
-                text=f'🗑 Delete #{i}',
-                callback_data=DeleteCallback(note_id=i).pack()
-            )]
-        ])
-        await message.answer(f'{i}.{note}',reply_markup=keyboard)
-
-
-
-@dp.message(Command('delete'))
-async def cmd_delete(message:types.Message):
+# --- Weather Handlers ---
+@dp.message(Command('weather'))
+async def cmd_weather(message: types.Message, state: FSMContext):
     text = message.text.strip()
     parts = text.split(maxsplit=1)
-    if len(parts)==1:
-        await message.answer(
-            'Choose number of note, that have to be deleted\n'
-            'example: /delete 9387654567'
-            )
+    if len(parts) > 1:
+        wt = await get_weather(parts[1])
+        await message.answer(wt, reply_markup=get_main_keyboard())
         return
-    try:
-        index=int(parts[1])
-    except ValueError:
-        await message.answer('Number have to be a number(not letter)\n'
-        'example: /delete 987656')
-        return
-    notes= load_notes()
-    if index<1 or index>len(notes):
-        await message.answer(f'There is no note with this number\n'
-                             f'You have only {len(notes)} notes')
-        return
-    deleted_note= notes.pop(index-1)
-    save_notes(notes)
-    await message.answer(f'You deleted note:{deleted_note}')
+    await state.set_state(WeatherState.waiting_for_city)
+    await message.answer('Enter city:', reply_markup=ReplyKeyboardRemove())
 
-
-
-@dp.message(Command('weather'))
-async def cmd_weather(message:types.Message):
-    text=message.text.strip()
-    parts=text.split(maxsplit=1)
-    if len(parts) ==1:
-        await message.answer(
-            'Please, choose City\n' \
-            'example: /weather Moscow'
-        )
-        return
-    city=parts[1]
-    await message.answer(f'Finding weather in {city}...')
-    wt=await get_weather(city)
-    await message.answer(wt)
-
+@dp.message(F.text == '🌍 Weather')
+async def ask_city(message: types.Message, state: FSMContext):
+    await state.set_state(WeatherState.waiting_for_city)
+    await message.answer('Enter city:', reply_markup=ReplyKeyboardRemove())
 
 @dp.message(WeatherState.waiting_for_city)
 async def process_city(message: types.Message, state: FSMContext):
-    city= message.text.strip()
-    await message.answer(f'Finding weather in {city}...')
-    wt=await get_weather(city)
-    await message.answer(wt,reply_markup=get_main_keyboard())
-    await state.clear()
-@dp.message(NoteState.waiting_for_note)
-async def process_note_text(message:types.Message, state: FSMContext):
-    note_text = message.text.strip()
-    notes = load_notes()
-    notes.append(note_text)
-    save_notes(notes)
-    await message.answer(
-        f'✅ Notes added! You have {len(notes)} notes)\n'
-        f'📌 {note_text}',
-        reply_markup=get_main_keyboard()
-    )
-    await state.clear()
-@dp.message(DeleteState.waiting_for_delete)
-async def process_delete_number(message: types.Message, state: FSMContext):
-    text= message.text.strip()
-    try:
-        index= int(text)
-    except ValueError:
-        await message.answer(
-            '❌ Number have to be a number(not letter)\n'
-            'example: /delete 987656',
-            reply_markup=ReplyKeyboardRemove()
-        )
-        return
-    notes= load_notes()
-    if index<1 or index> len(notes):
-        await message.answer(
-            f'❌ There is no note with this number\n'
-            f'You have only {len(notes)} notes',
-            reply_markup=ReplyKeyboardRemove()
-        )
-        return
-    delete_note=notes.pop(index-1)
-    save_notes(notes)
-    await message.answer(
-        f'✅ You deleted note: {delete_note}',
-        reply_markup=get_main_keyboard()
-    )
+    await message.answer(await get_weather(message.text.strip()), reply_markup=get_main_keyboard())
     await state.clear()
 
+# --- Search Handlers ---
+@dp.message(Command('find'))
+async def cmd_find(message: types.Message, state: FSMContext):
+    text = message.text.strip()
+    parts = text.split(maxsplit=1)
+    if len(parts) > 1:
+        query = parts[1]
+        msg = await message.answer(f'🔍 Searching for "{query}"...')
+        result = await search_everywhere(query)
+        await msg.edit_text(result, parse_mode='HTML', disable_web_page_preview=True)
+        await message.answer('What next?', reply_markup=get_main_keyboard())
+        return
+    await state.set_state(SearchState.waiting_for_query)
+    await message.answer('Enter name or username:', reply_markup=ReplyKeyboardRemove())
+
+@dp.message(F.text == '🔍 Search')
+async def start_search(message: types.Message, state: FSMContext):
+    await state.set_state(SearchState.waiting_for_query)
+    await message.answer('Enter name or username:', reply_markup=ReplyKeyboardRemove())
+
+@dp.message(SearchState.waiting_for_query)
+async def process_search(message: types.Message, state: FSMContext):
+    query = message.text.strip()
+    msg = await message.answer(f'🔍 Searching for "{query}"...')
+    result = await search_everywhere(query)
+    await msg.edit_text(result, parse_mode='HTML', disable_web_page_preview=True)
+    await state.clear()
+    await message.answer('What next?', reply_markup=get_main_keyboard())
+
+# --- Note Handlers ---
+@dp.message(Command('note'))
+async def cmd_note(message: types.Message, state: FSMContext):
+    text = message.text.strip()
+    parts = text.split(maxsplit=1)
+    if len(parts) > 1:
+        notes = load_notes()
+        notes.append(parts[1])
+        save_notes(notes)
+        await message.answer(f'✅ Saved ({len(notes)} notes)', reply_markup=get_main_keyboard())
+        return
+    await state.set_state(NoteState.waiting_for_note)
+    await message.answer('Enter note text:', reply_markup=ReplyKeyboardRemove())
+
+@dp.message(F.text == '📝 New Note')
+async def ask_note(message: types.Message, state: FSMContext):
+    await state.set_state(NoteState.waiting_for_note)
+    await message.answer('Enter note text:', reply_markup=ReplyKeyboardRemove())
+
+@dp.message(NoteState.waiting_for_note)
+async def save_new_note(message: types.Message, state: FSMContext):
+    notes = load_notes()
+    notes.append(message.text.strip())
+    save_notes(notes)
+    await message.answer(f'✅ Saved ({len(notes)} notes)', reply_markup=get_main_keyboard())
+    await state.clear()
+
+@dp.message(Command('all_notes'))
+@dp.message(F.text == '📚 My Notes')
+async def show_notes(message: types.Message):
+    notes = load_notes()
+    if not notes:
+        await message.answer('No notes yet.', reply_markup=get_main_keyboard())
+        return
+    for i, note in enumerate(notes, 1):
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text='❌', callback_data=DeleteCallback(note_id=i).pack())
+        ]])
+        await message.answer(f'{i}. {note}', reply_markup=keyboard)
+
+# --- Delete Handlers ---
+@dp.message(Command('delete'))
+@dp.message(F.text == '🗑 Delete Note')
+async def ask_delete(message: types.Message, state: FSMContext):
+    notes = load_notes()
+    if not notes:
+        await message.answer('No notes.', reply_markup=get_main_keyboard())
+        return
+    text = message.text.strip()
+    parts = text.split(maxsplit=1)
+    if len(parts) > 1:
+        try:
+            i = int(parts[1])
+            if 1 <= i <= len(notes):
+                deleted = notes.pop(i - 1)
+                save_notes(notes)
+                await message.answer(f'✅ Deleted: {deleted}', reply_markup=get_main_keyboard())
+                return
+        except ValueError:
+            pass
+    for i, note in enumerate(notes, 1):
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text='❌', callback_data=DeleteCallback(note_id=i).pack())
+        ]])
+        await message.answer(f'{i}. {note}', reply_markup=keyboard)
+    await state.set_state(DeleteState.waiting_for_delete)
+    await message.answer('Enter note number to delete:', reply_markup=ReplyKeyboardRemove())
+
+@dp.message(DeleteState.waiting_for_delete)
+async def delete_note_by_number(message: types.Message, state: FSMContext):
+    try:
+        i = int(message.text.strip())
+        notes = load_notes()
+        if 1 <= i <= len(notes):
+            deleted = notes.pop(i - 1)
+            save_notes(notes)
+            await message.answer(f'✅ Deleted: {deleted}', reply_markup=get_main_keyboard())
+            await state.clear()
+            return
+    except ValueError:
+        pass
+    await message.answer('❌ Invalid number.', reply_markup=ReplyKeyboardRemove())
 
 @dp.callback_query(DeleteCallback.filter())
-async def delete_note_inline(callback: types.CallbackQuery, callback_data: DeleteCallback):
-    note_id=callback_data.note_id
+async def delete_inline(callback: types.CallbackQuery, callback_data: DeleteCallback):
     notes = load_notes()
-    if note_id < 1  or note_id > len(notes):
-        await callback.answer(
-            '❌ There is no note with this number',
-            show_alert = True)
-        return
-    delete_note = notes.pop(note_id -1 )
-    save_notes(notes)
-    await callback.message.delete()
-    await callback.message.answer(
-        f'✅ You deleted note: {delete_note}',
-        reply_markup= get_main_keyboard()
-    )
-    await callback.answer('✅Deleted!')
+    i = callback_data.note_id
+    if 1 <= i <= len(notes):
+        deleted = notes.pop(i - 1)
+        save_notes(notes)
+        await callback.message.delete()
+        await callback.message.answer(f'✅ Deleted: {deleted}', reply_markup=get_main_keyboard())
+        await callback.answer('Deleted!')
+    else:
+        await callback.answer('Not found.', show_alert=True)
 
-
-@dp.message (Command('profile'))
-async def cmd_profile(message: types.Message):
-    user = message.from_user
-    await message.answer(
-        f'<b> Your profile:</b>\n\n'
-        f'<b>ID:</b> <code>{user.id}</code>\n'
-        f'<b>First Name:</b> {user.first_name or 'not found'}\n'
-        f'<b>Last Name:</b> {user.last_name or 'not found'}\n'
-        f'<b>Username:</b> @{user.username or 'not found'}\n'
-        f'<b>Language:</b> {user.language_code or 'not found'}',
-        parse_mode='HTML'
-    )
-
-
-@dp.message(Command('search'))
-async def cmd_search(message: types.Message):
-    text = message.text.strip()
-    parts = text.split(maxsplit=1)
-    if len(parts) == 1:
-        await message.answer('🔍 Write the Name you want to find')
-        return
-    
-    query = parts[1]
-    await message.answer(f'🔍 Finding: {query}...')
-    
-    params = {
-        'action': 'query',
-        'list': 'search',
-        'srsearch': query,
-        'format': 'json',
-        'srlimit': 5,
-    }
-    headers = {
-        'User-Agent': 'TelegramBot/1.0 (https://t.me/your_bot; your_email@example.com)'
-    }
-    
-    async with aiohttp.ClientSession(
-        connector=aiohttp.TCPConnector(ssl=False),
-        headers=headers
-    ) as session:
-        async with session.get('https://en.wikipedia.org/w/api.php', params=params) as resp:
-            if resp.status == 200:
-                data = await resp.json()
-                
-                search_results = data.get('query', {}).get('search', [])
-                
-                if not search_results:
-                    await message.answer(f'❌ Nothing found for "{query}".')
-                    return
-                
-                result = f'🔍 <b>Wikipedia results for "{query}":</b>\n\n'
-                
-                for i, item in enumerate(search_results[:5], 1):
-                    title = item['title']
-                    snippet = item['snippet'].replace('<span class="searchmatch">', '<b>').replace('</span>', '</b>')[:200]
-                    page_url = f'https://en.wikipedia.org/wiki/{title.replace(" ", "_")}'
-                    
-                    result += f'<b>{i}.</b> <a href="{page_url}">{title}</a>\n'
-                    result += f'{snippet}...\n\n'
-                
-                await message.answer(result, parse_mode='HTML', disable_web_page_preview=True)
-            else:
-                await message.answer(f'❌ Error: {resp.status}')
-
-@dp.message(Command('find'))
-async def cmd_find(message: types.Message):
-    text = message.text.strip()
-    parts = text.split(maxsplit=1)
-    if len(parts) == 1:
-        await message.answer(
-            'write the name you wand to find',
-            parse_mode='HTML'
-        )
-        return
-    
-    query = parts[1].strip()
-    
-    usernames = [
-        query.lower().replace(' ', '_'),   
-        query.lower().replace(' ', ''),  
-        query.lower().replace(' ', '.'),   
-    ]
-    
-    username = usernames[0]
-    await message.answer(f'🔍 Checing username: <b>{username}</b>...', parse_mode='HTML')
-    
-    platforms = {
-        '🇷🇺 ВКонтакте': f'https://vk.com/{username}',
-        '🇷🇺 Одноклассники': f'https://ok.ru/{username}',
-        '🇷🇺 Яндекс.Дзен': f'https://dzen.ru/{username}',
-        '🇷🇺 Пикабу': f'https://pikabu.ru/@{username}',
-        '🇷🇺 Хабр': f'https://habr.com/ru/users/{username}',
-        '🇷🇺 LiveJournal': f'https://{username}.livejournal.com',
-        '🇷🇺 RuTube': f'https://rutube.ru/channel/{username}',
-        '💻 GitHub': f'https://github.com/{username}',
-        '🐦 Twitter/X': f'https://x.com/{username}',
-        '📷 Instagram': f'https://instagram.com/{username}',
-        '🎵 TikTok': f'https://tiktok.com/@{username}',
-        '📱 Reddit': f'https://reddit.com/user/{username}',
-        '🎮 Steam': f'https://steamcommunity.com/id/{username}',
-        '💼 LinkedIn': f'https://linkedin.com/in/{username}',
-    }
-    
-    results = []
-    
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
-    }
-    
-    async with aiohttp.ClientSession(
-        connector=aiohttp.TCPConnector(ssl=False),
-        headers=headers
-    ) as session:
-        for name, url in platforms.items():
-            try:
-                async with session.get(url, timeout=5, allow_redirects=True) as resp:
-                    status = resp.status
-                    if status == 200:
-                        results.append(f'✅ <a href="{url}">{name}</a>')
-                    elif status == 404:
-                        results.append(f'❌ {name}: was not found')
-                    else:
-                        results.append(f'⚠️ {name}: code {status}')
-            except:
-                results.append(f'⏭️ {name}: no informacion')
-    
-    result_text = f'🔍 <b>Results of searching "{username}":</b>\n\n'
-    result_text += '\n'.join(results)
-    result_text += f'\n\n<i>Sites was checed: {len(platforms)} | </i>'
-    
-    await message.answer(result_text, parse_mode='HTML', disable_web_page_preview=True)
-
-
-
-
+# --- Echo ---
 @dp.message()
-async def echo(mes: types.Message):
-    await mes.answer(f"You wrote:{mes.text}")
+async def echo(message: types.Message):
+    await message.answer('Use /help for commands.')
+
+# --- Main ---
 async def main():
     await dp.start_polling(bot)
-if __name__=='__main__':
+
+if __name__ == '__main__':
     asyncio.run(main())
-    
