@@ -114,64 +114,38 @@ async def search_everywhere(query: str) -> str:
             except:
                 pass
     
-    # 2. Search via SearXNG, fallback to Wikipedia
-    google_results = []
-    
-    # Try SearXNG first
-    for server in [
-        'https://search.sapti.me/search',
-        'https://searx.tiekoetter.com/search',
-    ]:
-        try:
-            params = {'q': query, 'format': 'json', 'pageno': 1}
-            async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=False), headers=headers) as session:
-                async with session.get(server, params=params, timeout=10) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        results = data.get('results', [])
-                        if results:
-                            for item in results[:3]:
-                                title = item.get('title', '')[:100]
-                                link = item.get('url', '')
-                                if title and link:
-                                    google_results.append(f'• <a href="{link}">{title}</a>')
-                            break
-        except:
-            pass
-    
-    # Fallback to Wikipedia
-    if not google_results:
-        try:
-            params = {
-                'action': 'query',
-                'list': 'search',
-                'srsearch': query,
-                'format': 'json',
-                'srlimit': 3,
-            }
-            async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=False), headers=headers) as session:
-                async with session.get('https://en.wikipedia.org/w/api.php', params=params, timeout=10) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        for item in data.get('query', {}).get('search', [])[:3]:
-                            title = item['title']
-                            link = f'https://en.wikipedia.org/wiki/{title.replace(" ", "_")}'
-                            snippet = item.get('snippet', '').replace('<span class="searchmatch">', '').replace('</span>', '')[:100]
-                            google_results.append(f'• <a href="{link}">{title}</a> — {snippet}...')
-        except:
-            pass
+    # 2. Web search via Wikipedia
+    web_results = []
+    try:
+        params = {
+            'action': 'query',
+            'list': 'search',
+            'srsearch': query,
+            'format': 'json',
+            'srlimit': 3,
+        }
+        async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=False), headers=headers) as session:
+            async with session.get('https://en.wikipedia.org/w/api.php', params=params, timeout=10) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    for item in data.get('query', {}).get('search', [])[:3]:
+                        title = item['title']
+                        link = f'https://en.wikipedia.org/wiki/{title.replace(" ", "_")}'
+                        snippet = item.get('snippet', '').replace('<span class="searchmatch">', '').replace('</span>', '')[:100]
+                        web_results.append(f'• <a href="{link}">{title}</a> — {snippet}...')
+    except:
+        pass
     
     # 3. Build result
     result = ''
     if platform_results:
-        result += '<b>🔗 Profiles found:</b>\n' + '\n'.join(platform_results) + '\n'
-    if google_results:
+        result += '<b>🔗 Profiles found:</b>\n' + '\n'.join(platform_results)
+    if web_results:
         if result:
-            result += '\n'
-        result += '<b>🔍 Web search:</b>\n' + '\n'.join(google_results)
+            result += '\n\n'
+        result += '<b>📚 Wikipedia:</b>\n' + '\n'.join(web_results)
     
     return result if result else '❌ Nothing found.'
-
 # --- Handlers ---
 @dp.message(Command('start'))
 async def cmd_start(message: types.Message):
